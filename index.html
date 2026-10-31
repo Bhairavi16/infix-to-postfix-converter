@@ -1,0 +1,529 @@
+<title>Infix to Postfix Converter</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+/* Layout: one working column. Input and postfix result on top, then the compiler phases as a grid of panels. */
+:root {
+  --bg: #f3f6f8;
+  --surface: #ffffff;
+  --fg: #14202b;
+  --muted: #566775;
+  --line: #d6dfe5;
+  --accent: #0a6c88;
+  --accent-ink: #ffffff;
+  --accent-soft: #e0f1f6;
+  --err: #b3261e;
+  --err-soft: #fbe9e7;
+  --num: #1b5fb4;   --num-bg: #e4eefb;
+  --idn: #7a3fb0;   --idn-bg: #f0e8f8;
+  --opr: #b3500a;   --opr-bg: #fcebd9;
+  --par: #4a5a67;   --par-bg: #e8edf1;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1418; --surface: #141d23; --fg: #e5edf2; --muted: #8da0ae; --line: #27353f;
+    --accent: #4cc3e2; --accent-ink: #05222b; --accent-soft: #12303a;
+    --err: #ff8a80; --err-soft: #3a1b19;
+    --num: #7db4f5; --num-bg: #15283f;
+    --idn: #c79df0; --idn-bg: #2a1c3a;
+    --opr: #f4a465; --opr-bg: #3a2312;
+    --par: #a9b8c4; --par-bg: #212d35;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1418; --surface: #141d23; --fg: #e5edf2; --muted: #8da0ae; --line: #27353f;
+  --accent: #4cc3e2; --accent-ink: #05222b; --accent-soft: #12303a;
+  --err: #ff8a80; --err-soft: #3a1b19;
+  --num: #7db4f5; --num-bg: #15283f;
+  --idn: #c79df0; --idn-bg: #2a1c3a;
+  --opr: #f4a465; --opr-bg: #3a2312;
+  --par: #a9b8c4; --par-bg: #212d35;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+  padding-block: 24px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+h1 { font-size: clamp(1.5rem, 4vw, 2.1rem); line-height: 1.15; margin: 0; font-weight: 600; text-wrap: balance; letter-spacing: -0.01em; }
+h2 { font-size: 0.78rem; margin: 0; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+p { margin: 0; }
+.mono { font-family: var(--font-mono); }
+header { display: flex; flex-direction: column; gap: 6px; }
+.sub { color: var(--muted); max-width: 70ch; }
+.pipeline { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; font-size: 0.82rem; }
+.pipeline span { border: 1px solid var(--line); background: var(--surface); padding: 4px 10px; border-radius: 4px; color: var(--muted); }
+.pipeline b { color: var(--fg); font-weight: 600; }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr)); gap: 20px; }
+.grid > .panel { align-self: start; }
+.full { grid-column: 1 / -1; }
+
+.inrow { display: flex; gap: 8px; flex-wrap: wrap; }
+.inrow input { flex: 1 1 260px; min-width: 0; font: 500 1.25rem var(--font-mono); padding: 12px 14px; border: 1.5px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.inrow input:focus { border-color: var(--accent); }
+button { font: 500 0.9rem var(--font-body); cursor: pointer; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); padding: 8px 14px; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); padding: 12px 22px; font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chips .lbl { color: var(--muted); font-size: 0.82rem; margin-right: 2px; }
+.chip { font-family: var(--font-mono); font-size: 0.8rem; padding: 4px 9px; background: var(--bg); }
+
+.err { display: none; background: var(--err-soft); color: var(--err); border-radius: 6px; padding: 10px 12px; font-size: 0.9rem; }
+.err.show { display: block; }
+.err .caret { font-family: var(--font-mono); white-space: pre; overflow-x: auto; margin-top: 4px; font-size: 0.9rem; }
+
+.result { display: flex; flex-direction: column; gap: 10px; }
+.postfix { display: flex; flex-wrap: wrap; gap: 8px; min-height: 48px; align-items: center; }
+.sym { font-family: var(--font-mono); font-weight: 700; font-size: 1.35rem; padding: 6px 12px; border-radius: 6px; min-width: 44px; text-align: center; }
+.sym.num { color: var(--num); background: var(--num-bg); }
+.sym.id { color: var(--idn); background: var(--idn-bg); }
+.sym.op { color: var(--opr); background: var(--opr-bg); }
+.resrow { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.postline { font-family: var(--font-mono); color: var(--muted); font-size: 0.9rem; overflow-wrap: anywhere; }
+
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+th { text-align: left; font-weight: 600; color: var(--muted); font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; padding: 6px 10px; border-bottom: 1.5px solid var(--line); white-space: nowrap; }
+td { padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.m, th.m { font-family: var(--font-mono); }
+td.n { font-variant-numeric: tabular-nums; color: var(--muted); }
+tr:last-child td { border-bottom: 0; }
+.tag { font-family: var(--font-mono); font-size: 0.78rem; padding: 2px 7px; border-radius: 4px; font-weight: 500; white-space: nowrap; }
+.tag.NUMBER { color: var(--num); background: var(--num-bg); }
+.tag.IDENT { color: var(--idn); background: var(--idn-bg); }
+.tag.OPERATOR, .tag.UNARY { color: var(--opr); background: var(--opr-bg); }
+.tag.LPAREN, .tag.RPAREN { color: var(--par); background: var(--par-bg); }
+.stack { font-family: var(--font-mono); white-space: nowrap; }
+.act { color: var(--muted); min-width: 16ch; }
+.note { color: var(--muted); font-size: 0.85rem; }
+
+.treebox { overflow-x: auto; padding: 4px 0; }
+.treebox svg { display: block; margin: 0 auto; }
+.treebox .edge { stroke: var(--line); stroke-width: 1.8; fill: none; }
+.treebox .nd-op { fill: var(--opr-bg); stroke: var(--opr); stroke-width: 1.5; }
+.treebox .nd-num { fill: var(--num-bg); stroke: var(--num); stroke-width: 1.5; }
+.treebox .nd-id { fill: var(--idn-bg); stroke: var(--idn); stroke-width: 1.5; }
+.treebox text { font-family: var(--font-mono); font-size: 14px; font-weight: 700; text-anchor: middle; dominant-baseline: central; fill: var(--fg); }
+
+.vars { display: flex; flex-wrap: wrap; gap: 10px; }
+.vars label { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 0.9rem; }
+.vars input { width: 80px; font: 500 0.9rem var(--font-mono); padding: 5px 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--fg); }
+.value { font-family: var(--font-mono); font-size: 1.5rem; font-weight: 700; color: var(--accent); overflow-wrap: anywhere; }
+.tac { font-family: var(--font-mono); font-size: 0.92rem; display: flex; flex-direction: column; gap: 3px; }
+.tac div { display: flex; gap: 10px; }
+.tac .ln { color: var(--muted); width: 2ch; text-align: right; font-variant-numeric: tabular-nums; }
+.rules td:first-child { font-family: var(--font-mono); font-weight: 700; }
+.empty { color: var(--muted); padding: 10px 0; }
+footer { color: var(--muted); font-size: 0.82rem; }
+@media (prefers-reduced-motion: no-preference) { button { transition: border-color .15s; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Infix to Postfix Converter</h1>
+    <p class="sub">Compiler Construction mini project. Type an arithmetic expression and follow it through the phases of a small compiler front end.</p>
+    <div class="pipeline" aria-label="Compiler phases">
+      <span><b>1</b> Lexical analysis</span>
+      <span><b>2</b> Syntax analysis (shunting-yard)</span>
+      <span><b>3</b> Postfix generation</span>
+      <span><b>4</b> Syntax tree, three-address code, evaluation</span>
+    </div>
+  </header>
+
+  <section class="panel">
+    <h2>Source expression</h2>
+    <form id="form" class="inrow" autocomplete="off">
+      <input id="src" type="text" spellcheck="false" aria-label="Infix expression" value="a + b * (c - d) ^ 2 / e">
+      <button class="primary" type="submit">Convert</button>
+    </form>
+    <div class="chips" id="chips"><span class="lbl">Try</span></div>
+    <div class="err" id="err" role="alert"></div>
+  </section>
+
+  <section class="panel result" id="resultPanel">
+    <div class="resrow"><h2>Postfix (reverse Polish) output</h2><button id="copy" type="button">Copy postfix</button></div>
+    <div class="postfix" id="postfix"></div>
+    <div class="postline" id="postline"></div>
+  </section>
+
+  <div class="grid">
+    <section class="panel">
+      <h2>Phase 1 · Token stream</h2>
+      <div class="tbl"><table>
+        <thead><tr><th>#</th><th>Token type</th><th>Lexeme</th><th>Col</th></tr></thead>
+        <tbody id="tokens"></tbody>
+      </table></div>
+    </section>
+
+    <section class="panel">
+      <h2>Phase 2 · Shunting-yard trace</h2>
+      <div class="tbl"><table>
+        <thead><tr><th>Read</th><th>Action</th><th>Operator stack</th><th>Output</th></tr></thead>
+        <tbody id="trace"></tbody>
+      </table></div>
+    </section>
+
+    <section class="panel full">
+      <h2>Syntax tree built from the postfix</h2>
+      <div class="treebox" id="tree"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Three-address code</h2>
+      <div class="tac" id="tac"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Evaluate postfix</h2>
+      <div class="vars" id="vars"></div>
+      <div class="value" id="value"></div>
+      <div class="tbl"><table>
+        <thead><tr><th>Read</th><th>Operand stack</th></tr></thead>
+        <tbody id="evalsteps"></tbody>
+      </table></div>
+    </section>
+
+    <section class="panel full">
+      <h2>Grammar and operator rules</h2>
+      <div class="tbl"><table class="rules">
+        <thead><tr><th>Operator</th><th>Meaning</th><th>Precedence</th><th>Associativity</th></tr></thead>
+        <tbody>
+          <tr><td>^</td><td>Exponent</td><td class="n">4 (highest)</td><td>Right</td></tr>
+          <tr><td>u- u+</td><td>Unary minus and plus</td><td class="n">3</td><td>Right</td></tr>
+          <tr><td>* / %</td><td>Multiply, divide, remainder</td><td class="n">2</td><td>Left</td></tr>
+          <tr><td>+ -</td><td>Add, subtract</td><td class="n">1</td><td>Left</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note mono">expr → term { (+|-) term } &nbsp; term → factor { (*|/|%) factor } &nbsp; factor → unary [ ^ factor ] &nbsp; unary → (+|-) unary | primary &nbsp; primary → NUMBER | IDENT | ( expr )</p>
+    </section>
+  </div>
+  <footer>Operands may be numbers (including decimals) or identifiers such as x or total_1. Unary minus is written u- in the postfix output so it stays distinct from subtraction.</footer>
+</div>
+
+<script>
+//CORE-START
+var PREC = { '+': 1, '-': 1, '*': 2, '/': 2, '%': 2, 'u-': 3, 'u+': 3, '^': 4 };
+var RIGHT = { '^': true, 'u-': true, 'u+': true };
+
+function CompileError(msg, pos) { this.message = msg; this.pos = pos; }
+
+// Phase 1: lexical analysis
+function lex(src) {
+  var toks = [], i = 0, prev = null, m;
+  while (i < src.length) {
+    var c = src[i];
+    if (/\s/.test(c)) { i++; continue; }
+    var rest = src.slice(i), t;
+    if ((m = /^\d+(\.\d+)?/.exec(rest)) || (m = /^\.\d+/.exec(rest))) {
+      t = { type: 'NUMBER', lexeme: m[0], pos: i };
+    } else if ((m = /^[A-Za-z_][A-Za-z_0-9]*/.exec(rest))) {
+      t = { type: 'IDENT', lexeme: m[0], pos: i };
+    } else if (c === '(') { t = { type: 'LPAREN', lexeme: c, pos: i }; m = [c]; }
+    else if (c === ')') { t = { type: 'RPAREN', lexeme: c, pos: i }; m = [c]; }
+    else if ('+-*/%^'.indexOf(c) >= 0) {
+      var unary = (c === '+' || c === '-') &&
+        (prev === null || prev.type === 'OPERATOR' || prev.type === 'UNARY' || prev.type === 'LPAREN');
+      t = { type: unary ? 'UNARY' : 'OPERATOR', lexeme: c, pos: i };
+      m = [c];
+    } else {
+      throw new CompileError("Invalid character '" + c + "'", i);
+    }
+    t.sym = t.type === 'UNARY' ? 'u' + t.lexeme : t.lexeme;
+    toks.push(t); prev = t; i += m[0].length;
+  }
+  if (!toks.length) throw new CompileError('Enter an expression to convert', 0);
+  return toks;
+}
+
+// Syntax check: operand and operator must alternate, parentheses must balance
+function validate(toks, srcLen) {
+  var expectOperand = true, depth = [];
+  toks.forEach(function (t) {
+    if (expectOperand) {
+      if (t.type === 'NUMBER' || t.type === 'IDENT') expectOperand = false;
+      else if (t.type === 'UNARY' || t.type === 'LPAREN') { if (t.type === 'LPAREN') depth.push(t); }
+      else if (t.type === 'RPAREN') throw new CompileError("Missing operand before ')'", t.pos);
+      else throw new CompileError("Missing operand before '" + t.lexeme + "'", t.pos);
+    } else {
+      if (t.type === 'OPERATOR') expectOperand = true;
+      else if (t.type === 'RPAREN') {
+        if (!depth.length) throw new CompileError("Unmatched ')'", t.pos);
+        depth.pop();
+      } else throw new CompileError("Missing operator before '" + t.lexeme + "'", t.pos);
+    }
+  });
+  if (depth.length) throw new CompileError("Unmatched '('", depth[depth.length - 1].pos);
+  if (expectOperand) throw new CompileError('Expression ends where an operand is expected', srcLen);
+}
+
+// Phase 2 and 3: shunting-yard with a step trace
+function toPostfix(toks) {
+  var out = [], st = [], steps = [];
+  function snap(tok, action) {
+    steps.push({ tok: tok, action: action, stack: st.map(function (s) { return s.sym; }), out: out.map(function (s) { return s.sym; }) });
+  }
+  toks.forEach(function (t) {
+    if (t.type === 'NUMBER' || t.type === 'IDENT') { out.push(t); snap(t.lexeme, 'Operand, send to output'); }
+    else if (t.type === 'LPAREN') { st.push(t); snap('(', 'Push ( on stack'); }
+    else if (t.type === 'RPAREN') {
+      var n = 0;
+      while (st[st.length - 1].type !== 'LPAREN') { out.push(st.pop()); n++; }
+      st.pop();
+      snap(')', n ? 'Pop ' + n + ' operator' + (n > 1 ? 's' : '') + ' to output, discard (' : 'Discard ( and )');
+    } else if (t.type === 'UNARY') {
+      st.push(t); snap(t.sym, 'Prefix operator, push');
+    } else {
+      var p1 = PREC[t.sym], popped = [];
+      while (st.length) {
+        var top = st[st.length - 1];
+        if (top.type === 'LPAREN') break;
+        var p2 = PREC[top.sym];
+        if (p2 > p1 || (p2 === p1 && !RIGHT[t.sym])) { popped.push(top.sym); out.push(st.pop()); } else break;
+      }
+      st.push(t);
+      snap(t.sym, popped.length ? 'Pop ' + popped.join(' ') + ' (higher or equal precedence), push ' + t.sym : 'Push ' + t.sym);
+    }
+  });
+  if (st.length) {
+    var names = [];
+    while (st.length) { var o = st.pop(); names.push(o.sym); out.push(o); }
+    snap('end', 'Input done, pop ' + names.join(' '));
+  } else snap('end', 'Input done, stack empty');
+  return { out: out, steps: steps };
+}
+
+function buildTree(post) {
+  var st = [];
+  post.forEach(function (t) {
+    if (t.type === 'NUMBER' || t.type === 'IDENT') st.push({ label: t.lexeme, kind: t.type === 'NUMBER' ? 'num' : 'id' });
+    else if (t.type === 'UNARY') st.push({ label: t.sym, kind: 'op', l: st.pop() });
+    else { var r = st.pop(), l = st.pop(); st.push({ label: t.sym, kind: 'op', l: l, r: r }); }
+  });
+  return st.pop();
+}
+
+function genTAC(post) {
+  var st = [], lines = [], k = 0;
+  post.forEach(function (t) {
+    if (t.type === 'NUMBER' || t.type === 'IDENT') st.push(t.lexeme);
+    else if (t.type === 'UNARY') {
+      var a = st.pop(), tmp = 't' + (++k);
+      lines.push(tmp + ' = ' + (t.lexeme === '-' ? '-' : '+') + a); st.push(tmp);
+    } else {
+      var b = st.pop(), a2 = st.pop(), tmp2 = 't' + (++k);
+      lines.push(tmp2 + ' = ' + a2 + ' ' + t.lexeme + ' ' + b); st.push(tmp2);
+    }
+  });
+  return { lines: lines, result: st.pop() };
+}
+
+function fmt(n) {
+  if (!isFinite(n)) return String(n);
+  return String(+n.toPrecision(10));
+}
+
+function evaluate(post, vars) {
+  var st = [], steps = [];
+  post.forEach(function (t) {
+    if (t.type === 'NUMBER') st.push(parseFloat(t.lexeme));
+    else if (t.type === 'IDENT') st.push(vars[t.lexeme]);
+    else if (t.type === 'UNARY') { var a = st.pop(); st.push(t.lexeme === '-' ? -a : a); }
+    else {
+      var b = st.pop(), x = st.pop(), r;
+      switch (t.lexeme) {
+        case '+': r = x + b; break; case '-': r = x - b; break;
+        case '*': r = x * b; break; case '/': r = x / b; break;
+        case '%': r = x % b; break; case '^': r = Math.pow(x, b); break;
+      }
+      st.push(r);
+    }
+    steps.push({ sym: t.sym === t.lexeme || t.type === 'UNARY' ? t.sym : t.lexeme, stack: st.map(fmt) });
+  });
+  return { value: st[0], steps: steps };
+}
+
+function compile(src) {
+  var toks = lex(src);
+  validate(toks, src.length);
+  var pf = toPostfix(toks);
+  return { toks: toks, post: pf.out, steps: pf.steps };
+}
+//CORE-END
+
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var varVals = {}, lastPost = null;
+  var EXAMPLES = ['a + b * c', '(a + b) * (c - d)', 'a + b * (c - d) ^ 2 / e', '2 ^ 3 ^ 2', '-x ^ 2 + 3.5 * y', '(10 + 2) * 3 - 8 / 4'];
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function row(tbody, cells) {
+    var tr = el('tr');
+    cells.forEach(function (c) {
+      var td = el('td', c.cls || '');
+      if (c.node) td.appendChild(c.node); else td.textContent = c.text;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  }
+  function clear() { for (var i = 0; i < arguments.length; i++) $(arguments[i]).textContent = ''; }
+
+  function showError(e, src) {
+    clear('postfix', 'postline', 'tokens', 'trace', 'tree', 'tac', 'vars', 'value', 'evalsteps');
+    lastPost = null;
+    var box = $('err');
+    box.textContent = '';
+    box.appendChild(el('div', '', e.message + (e.pos !== undefined ? ' at column ' + (e.pos + 1) : '')));
+    var caret = el('div', 'caret', src + '\n' + new Array(e.pos + 1).join(' ') + '^');
+    box.appendChild(caret);
+    box.className = 'err show';
+    $('postfix').appendChild(el('div', 'empty', 'Fix the expression to see the postfix output.'));
+  }
+
+  function renderTree(root) {
+    var host = $('tree'); host.textContent = '';
+    var idx = 0, maxD = 0;
+    (function walk(n, d) {
+      if (n.l) walk(n.l, d + 1);
+      n.x = idx++; n.d = d; maxD = Math.max(maxD, d);
+      if (n.r) walk(n.r, d + 1);
+    })(root, 0);
+    var DX = 46, DY = 58, R = 19, P = 26;
+    var W = (idx - 1) * DX + 2 * P, H = maxD * DY + 2 * P;
+    var NS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    svg.setAttribute('width', W); svg.setAttribute('height', H);
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'Syntax tree of the expression');
+    function px(n) { return P + n.x * DX; }
+    function py(n) { return P + n.d * DY; }
+    (function edges(n) {
+      [n.l, n.r].forEach(function (c) {
+        if (!c) return;
+        var ln = document.createElementNS(NS, 'line');
+        ln.setAttribute('class', 'edge');
+        ln.setAttribute('x1', px(n)); ln.setAttribute('y1', py(n));
+        ln.setAttribute('x2', px(c)); ln.setAttribute('y2', py(c));
+        svg.appendChild(ln); edges(c);
+      });
+    })(root);
+    (function nodes(n) {
+      var w = Math.max(R, n.label.length * 5 + 10);
+      var r = document.createElementNS(NS, 'rect');
+      r.setAttribute('class', 'nd-' + n.kind);
+      r.setAttribute('x', px(n) - w); r.setAttribute('y', py(n) - R);
+      r.setAttribute('width', w * 2); r.setAttribute('height', R * 2); r.setAttribute('rx', R);
+      svg.appendChild(r);
+      var t = document.createElementNS(NS, 'text');
+      t.setAttribute('x', px(n)); t.setAttribute('y', py(n));
+      t.textContent = n.label; svg.appendChild(t);
+      if (n.l) nodes(n.l); if (n.r) nodes(n.r);
+    })(root);
+    host.appendChild(svg);
+  }
+
+  function renderVars(toks) {
+    var box = $('vars'), names = [];
+    toks.forEach(function (t) { if (t.type === 'IDENT' && names.indexOf(t.lexeme) < 0) names.push(t.lexeme); });
+    box.textContent = '';
+    names.forEach(function (n, i) {
+      if (!(n in varVals)) varVals[n] = String(i + 2);
+      var lab = el('label'); lab.appendChild(el('span', '', n + ' ='));
+      var inp = el('input'); inp.type = 'number'; inp.step = 'any'; inp.value = varVals[n];
+      inp.id = 'var-' + n; inp.setAttribute('aria-label', 'Value of ' + n);
+      inp.addEventListener('input', function () { varVals[n] = inp.value; runEval(); });
+      lab.appendChild(inp); box.appendChild(lab);
+    });
+    if (!names.length) box.appendChild(el('span', 'note', 'No variables. The expression uses only numbers.'));
+  }
+
+  function runEval() {
+    if (!lastPost) return;
+    var vars = {};
+    for (var k in varVals) vars[k] = parseFloat(varVals[k]);
+    var ok = true;
+    lastPost.forEach(function (t) { if (t.type === 'IDENT' && !isFinite(vars[t.lexeme])) ok = false; });
+    var tb = $('evalsteps'); tb.textContent = '';
+    if (!ok) { $('value').textContent = 'Enter a value for each variable'; return; }
+    var res = evaluate(lastPost, vars);
+    res.steps.forEach(function (s) {
+      row(tb, [{ text: s.sym, cls: 'm' }, { text: '[ ' + s.stack.join(', ') + ' ]', cls: 'm' }]);
+    });
+    $('value').textContent = 'Result = ' + fmt(res.value) + (isFinite(res.value) ? '' : '  (division by zero)');
+  }
+
+  function run() {
+    var src = $('src').value;
+    var r;
+    try { r = compile(src); } catch (e) {
+      if (e instanceof CompileError) { showError(e, src); return; }
+      throw e;
+    }
+    $('err').className = 'err';
+    lastPost = r.post;
+
+    var pf = $('postfix'); pf.textContent = '';
+    r.post.forEach(function (t) {
+      var k = t.type === 'NUMBER' ? 'num' : t.type === 'IDENT' ? 'id' : 'op';
+      pf.appendChild(el('span', 'sym ' + k, t.sym));
+    });
+    $('postline').textContent = r.post.map(function (t) { return t.sym; }).join(' ');
+
+    var tk = $('tokens'); tk.textContent = '';
+    r.toks.forEach(function (t, i) {
+      row(tk, [{ text: String(i + 1), cls: 'n' }, { node: el('span', 'tag ' + t.type, t.type) },
+               { text: t.lexeme, cls: 'm' }, { text: String(t.pos + 1), cls: 'n' }]);
+    });
+
+    var tr = $('trace'); tr.textContent = '';
+    r.steps.forEach(function (s) {
+      row(tr, [{ text: s.tok, cls: 'm' }, { text: s.action, cls: 'act' },
+               { text: s.stack.length ? '[ ' + s.stack.join(' ') + ' ]' : '[ ]', cls: 'stack' },
+               { text: s.out.join(' '), cls: 'stack' }]);
+    });
+
+    renderTree(buildTree(r.post));
+
+    var tac = genTAC(r.post), tb = $('tac'); tb.textContent = '';
+    if (!tac.lines.length) tb.appendChild(el('div', 'empty', 'A single operand needs no instructions. Result = ' + tac.result));
+    tac.lines.forEach(function (l, i) {
+      var d = el('div'); d.appendChild(el('span', 'ln', String(i + 1))); d.appendChild(el('span', '', l)); tb.appendChild(d);
+    });
+
+    renderVars(r.toks);
+    runEval();
+  }
+
+  var chips = $('chips');
+  EXAMPLES.forEach(function (ex) {
+    var b = el('button', 'chip', ex); b.type = 'button';
+    b.addEventListener('click', function () { $('src').value = ex; run(); });
+    chips.appendChild(b);
+  });
+  $('form').addEventListener('submit', function (e) { e.preventDefault(); run(); });
+  $('src').addEventListener('input', run);
+  $('copy').addEventListener('click', function () {
+    var b = $('copy'), txt = $('postline').textContent;
+    function done(m) { b.textContent = m; setTimeout(function () { b.textContent = 'Copy postfix'; }, 1400); }
+    if (!txt) return;
+    try { navigator.clipboard.writeText(txt).then(function () { done('Copied'); }, function () { done('Select text to copy'); }); }
+    catch (e) { done('Select text to copy'); }
+  });
+  run();
+})();
+</script>
